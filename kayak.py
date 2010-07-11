@@ -1,197 +1,143 @@
 # -*- coding: utf-8 -*-
 #!/usr/bin/env python
 
-
-"""Kayak Search API Library for Python
-"""
+"""Kayak Search API Library for python"""
 
 import sys
+import xml.dom.minidom
+import time
 import urllib2
-from time import sleep
-from lxml import etree
-from lxml.html import tostring, html5parser
 
-TOKEN = 'KBHCF2zy2ti9FdO9nvd8kA'
-HOSTNAME = 'api.kayak.com'
-BASE_URL = 'http://' + HOSTNAME
-SESSION_URL = BASE_URL + '/k/ident/apisession?token=' + TOKEN
-SEARCH_URL_BASE = BASE_URL + '/s/apisearch?basicmode=true&'
-PORT = 80
+kayakkey = 'KBHCF2zy2ti9FdO9nvd8kA'
 
-def get_session(token, parser=html5parser):
-    """Get session id
-    >>> sid = get_session(TOKEN)
-    >>> sid != ""
-    """
-    response = urllib2.urlopen(SESSION_URL).read()
-    root = parser.fromstring(response)
-    sid = root.find('sid').text
+def getkayaksession():
+    # Construct the URL to start a session
+    url = 'http://www.kayak.com/k/ident/apisession?token=%s&version=1' % kayakkey
+
+    # Parse the resulting XML
+    doc = xml.dom.minidom.parseString(urllib2.urlopen(url).read())
+
+    # Find <sid>xxxxx</sid>
+    sid = doc.getElementsByTagName('sid')[0].firstChild.data
     return sid
 
-def _start_search(url, parser=html5parser):
-    """Generic search function
-    """
-    response = urllib2.urlopen(url).read()
-    print BASE_URL + url
-    print response    
-    try:
-        f = open("ksearchid.xml", "w")
-        f.write(response)
-        f.flush()
-    finally:
-        f.close()
-    xml = parser.fromstring(response)
-    searchid = xml.find('searchid')
-    if searchid:
-        searchid = searchid.text
-    else:
-        print "search error:"
-        print response
-        return None
+
+def flightsearch(sid, origin, destination, depart_date):
+    # Construct search URL
+    url = 'http://api.kayak.com/s/apisearch'
+    url += '?basicmode=true&oneway=y&origin=%s' % origin
+    url += '&destination=%s&depart_date=%s' % (destination, depart_date)
+    url += '&return_data=none&depart_time=a&return_time=a'
+    url += '&travelers=1&cabin=e&action=doFlights&apimode=1'
+    url += '&_sid_=%s&version=1' % (sid)
+
+    # Get the XML
+    doc = xml.dom.minidom.parseString(urllib2.urlopen(url).read())
+
+    # Extract the search ID
+    searchid = doc.getElementsByTagName('searchid')[0].firstChild.data
+
     return searchid
 
-def start_flight_search(sid, oneway, origin,
-                        destination, dep_date, ret_date, travelers):
-    """Start to search flight
-    """
-    url =  SEARCH_URL_BASE + 'oneway=n&origin=%(origin)s' \
-          '&destination=%(destination)s&destcode=&depart_date=%(dep_date)s' \
-          'depart_time=a&return_date=%(return_date)s&return_time=a' \
-          'travelers=%(travelers)s&cabin=f&action=doflights&apimode=1&_sid=%(sid)s' \
-          % {'origin': origin,  'destination': destination,
-             'dep_date': dep_date, 'ret_date': ret_date,
-             'travelers': travelers }
-           
-    return _start_search(url)
+"""
+you'll need a function that requests the results
+until there are no more. Kayak privides another URL,
+flight, which gives these results. In the returned XML,
+there is a tag called morepending, which contains
+the word 'true' until the search is complete.
+The function has to request the page until morepending
+is no longer true, and then the functions get the complete results.
+"""
 
-def start_hotel_search(sid, citystatuecountry, dep_date, ret_date, travelers):
-    """Start to search hotel
-    """
-    csc = urllib2.quote(citystatuecountry)
-    dep_date = urllib2.quote(dep_date)
-    ret_date = urllib2.quote(ret_date)
-    url = SEARCH_URL_BASE + '/s/apisearch?basicmode=true&othercity=%(csc)s' \
-          '&checkin_date=%(dep_date)s&checkout_date=%(ret_date)s&minstars=-1' \
-          '&guests1=%(travelers)s&guests2=1&rooms=1&action=dohotels&apimode=1' \
-          '&_sid_=%(sid)s' \
-          % {'csc': csc, 'dep_date': dep_date, 'ret_date': ret_date,
-             'travelers': travelers, 'sid': sid }
-          
-    return _start_search(url)
+def flightsearchresults(sid, searchid):
+    # Removes leading $, commas and converts number to a float
+    def parseprice(p):
+        return float(p[1:].replace(',',''))
 
-RESULTS = []
-LAST_COUNT = 0
+    # Polling loop
+    while 1:
+        time.sleep(2)
 
-def _poll_results_file(search_type):
-    """Load results from a file, for debugging only.
-    """
-    f = open("ksearchresults.xml", "r")
-    xml_text = f.read()
-    return handle_results(search_type, xml_text)
+        # Construct URL for pollng
+        url = 'http://www.kayak.com/s/basic/flight?'
+        url += 'searchid=%s&c=5&apimode=1&_sid_=%s&version=1' % (searchid, sid)
+        response = urllib2.urlopen(url).read()
+        doc = xml.dom.minidom.parseString(response)
 
-def poll_results(search_type, sid, searchid, count):
-    """Poll results and write them to file.
-    """
-    more = None
-    url_f = '/s/apibasic/%(search_type)s?searchid=%(searchid)s&apimode=1&_sid_=%(sid)s' \
-            % {'searchid': searchid, 'sid': sid }    
-    if search_type == 'f':
-        url = url_f % {'search_type': 'flight'}
-    elif search_type == 'h':
-        url = url_f % {'search_type': 'hotel'}
-        
-    url = (url + "&c=%s" % count) if count else url
-    response = urllib2.urlopen(BASE_URL + url)
-    print BASE_URL + url
+        # Look for morepending tag, and wait until it is no longer true
+        morepending = doc.getElementsByTagName('morepending')[0].firstChild
+        if morepending == None or morepending.data == 'false':
+            break
+
+    # Now download the complete list
+    url = 'http://ww.kayak.com/s/basic/flight?'
+    url += 'searchid=%s&c=999&apimode=1&_sid_=%s&version=1' % (searchid, sid)
+    response = urllib2.urlopen(url).read()
+    doc = xml.dom.minidom.parseString(response)
+
+    # Write the results
     try:
-        f = open("ksearchbody.xml", "w")
-        f.write(response)
-        f.flush()
+        fd = open("results.xml", "w")
+        fd.write(response)
+        fd.flush()
     finally:
-        f.close()
-    more = handle_results(search_type, response)
-    if more != 'true':
-        # save the response, so we can test without doing an actual
-        # search.
-        try:
-            f = open("ksearchresults.xml", "w")
-            f.write(response)
-            f.flush()
-        finally:
-            f.close()
-    return more
+        fd.close()
+    
+    # Get the various elements as lists
+    prices = doc.getElementsByTagName('price')
+    departures = doc.getElementsByTagName('depart')
+    arrivals = doc.getElementsByTagName('arrive')
+    airlines = doc.getElementsByTagName('airline_display')
 
-def handle_results(search_type, body, parser=html5parser):
-    """Process the xml result string.
-    """
-    xml = parse.fromstring(body)
-    more = xml.find('searchresult/morepending')
-    last_count = xml.find('searchresult/count').text
-    more = more.text if more else None
-    if more != 'true':
-        results = []
-        if search_type == 'f':
-            # This loop over the XML is just for illustration.
-            # Once you have the XML, the rest is not that interesting.
-            for e in xml.findall('searchresult/trips/trip'):
-                for t in e.findall('price'):
-                    print t.text
-                    # print t.at
-                for legs in e.findall('legs'):
-                    # Do something with the leg XML element
-                    for l in legs:
-                        for ld in l:
-                            # leg XML contains detail info
-                            pass
-        if search_type == 'h':
-            for e in xml.findall('searchresult/hotels/hotel'):
-                # Do something interesting with the hotel XML
-                for t in e.findall("price"):
-                    print t.text
-                    # print t.att
-    return more
+    # Zip them together
+    return zip([p.firstChild.data for p in departures],
+               [p.firstChild.data for p in arrivals],
+               [parseprice(p.firstChild.data) for p in prices],
+               [p.firstChild.data for p in airlines])
 
-if __name__ == '__main__':
-    if len(sys.argv) < 5 or len(sys.argv) > 6:
-        print "usage:"
-        print "python kayak.py f ORIGIN_AIRPORT DESTINATION_AIRPORT " \
-              "DEPART_DATE [RETURN_DATE]"
-        print "python kayak.py h \"city, RC, CC\" CHECKIN_DATE CHECKOUT_DATE"
+# If you want to take ONLY DT time, you can type:
+# [p.firstChild.data.split(' ')[1] for p in departures],
 
-    search_type = argv[1]
+"""
+Notice that at the end the function just gets all the price, depart,
+and arrive tags. There will be an equal number of them - one for
+each flight - so the zip function can be used to join them all together
+into tuples in a big list. The departure and arrival information is
+given as date and time separated by a space, so the function splits
+the string to get only the time. The function also converts the price
+to a float by passing it to parseprice().
+"""
 
-    sid = get_session(TOKEN)
-    if not sid:
-        print "bad token, sorry"
-        exit(1)
-    print "session id = %s" % sid
-            
-    if search_type == 'f':
-        origin = sys.argv[2]
-        destination = sys.argv[3]
-        depart_date = sys.argv[4]
-        return_date = sys.argv[5]
-        searchid = start_flight_search(
-            sid, 'n', orign, destination, depart_date, return_date, 1)
-    elif search_type == 'h':
-        citystatuecountry = sys.argv[2]
-        depart_date = sys.argv[3]
-        return_date = sys.argv[4]
-        searchid = start_hotel_search(
-            sid, citystatuecountry, dep_date, ret_date, 1)
-    else:
-        print "unknown search type %s should be 'f' or 'h'" % search_type
 
-    if !searchid:
-        print "search failed. see error document."
-        exit(1)
-    print "search id = %s" % (searchid)
-    sleep(2)
+"""
+To create a full schedule for all the different people in the Glass
+family with the same structure that was originally loaded in from the
+file. This is just a matter of looping over the people in the list and
+performing the flight search for their outbound and return flights.
+"""
 
-    while more == 'true':
-        more = poll_results(search_type, sid, searchid, None)
-        print "more to come: %s %s so far" % (more, last_count)
-        sleep(3)
-    # one final call to get all results (instead of only 10)
-    poll_results(search_type, sid, searchid, last_count)
-    print "Results stored in ksearchresults.xml"
+def createschedule(people, dest, dep, ret):
+    # Get a session id for these searches
+    sid = getkayaksession()
+    flights = {}
+
+    for p in people:
+        name, origin = p
+        # Outbound flight
+        searchid = flightsearch(sid, origin, dest, dep)
+        flights[(origin,dest)] = flightsearchresults(sid, searchid)
+
+    return flights
+
+        
+def test_search():
+    sid = getkayaksession()
+    searchid = flightsearch(sid, 'NRT', 'PRG', '09/10/2010')
+    flights = flightsearchresults(sid, searchid)
+    print " DT | AT | Price($) | Airline" 
+    for f in flights:
+        print f
+        
+
+    
+test_search()

@@ -1,0 +1,57 @@
+Kayak API Research Result
+researched by Taku Fukushima,
+written by Yohei Yasukawa, 2010/07/10
+
+1. 航空券のデータをリスト形式で処理出来るか？
+xml形式でデータが返ってくるので、リスト形式など、好きな形でデータを処理出来る。
+- Kayak API + Deep Web Crawlerのハイブリッドサーチは実現可能
+
+
+2. 取得出来るデータは、僕らが取得したいデータとハイブリッド出来るか？
+- TODO: データ検証。
+-- 検証内容：Kayak APIでの検索結果とDeep Web Crawlerの検索結果は同じであるか？
+-- OR: results.xmlの結果と、航空会社に手入力したときの結果が同じかどうか？
+
+3. Kayak APIは商用利用可能か？
+- TODO: See 'Term of Use' below.
+-- 書いてない。でもmashupは歓迎している。
+-- 聞けば教えてくれそう。
+
+"Terms of Use"
+You are free to use the Kayak search API, free of charge, providing you meet certain conditions.
+
+1. If your application is going to allow online booking, you must use the URLs
+provided in the results. Searches cost money, so we need to be able to log
+clicks so we can collect any referral fees.
+
+2. Your application will be limited to 1000 searches/day, based on a developer
+key that you select. If you expect to generate more traffic than that, please
+contact us via our feedback system. Please note: the quota system is
+1000/day, but spread out over 24 hours, which really limits you to 41
+searches/hour.
+
+For details, please see ./Sorarier/src/kayak/api-docs/readme.pdf
+
+
+4. Kayak APIはハイブリッドサーチを許しているか？
+- TODO: Same as above.
+-- 書いてない。
+-- 同上で、聞くしかないのかも。
+
+
+5. 代理店のチケット情報をFiltering Outし、直販のデータだけを切り取るフィルターの実装
+- 実現可能
+-- TODO: How to filter the data
+-- TODO: Merge Kakak API Library with filtering functions, with Sorarier Meta-search engine
+
+
+
+
+
+
+
+
+
+
+
+

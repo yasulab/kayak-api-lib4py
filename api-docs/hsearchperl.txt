@@ -1,0 +1,274 @@
+#!/usr/bin/perl
+
+###############################################################################
+# Demonstrates Kayak API Hotel Search.
+# See http://www.kayak.com/labs/api/search/spec.vtl for API details.
+#
+# Takes query options from command line, sends query to kayak, prints search
+# results on stdout.
+#
+# ./hsearch.pl --city="Los Angeles" --state=CA --numresults=10
+#
+###############################################################################
+
+use strict;
+
+use Getopt::Long;
+use LWP::Simple;
+use URI::Escape;
+use XML::DOM;
+
+my %opts = ();
+
+#
+# See http://www.kayak.com/labs/api/search/developerkey.vtl
+# Purposelly causes error at runtime so you'll have to look at this line!
+#
+
+my $g_token = INSERT YOUR TOKEN HERE
+
+#
+# Establish default values for the command line arguments.  Makes testing
+# easier.
+#
+
+my $g_hostname = "http://www.kayak.com";
+my $g_city = "Boston";
+my $g_state = "MA";
+my $g_country = "US";
+my $g_guests1 = "2";
+my $g_rooms = "1";
+my $g_checkin = `date +%m/%d/%Y --date=\"2 days\"`;
+chop($g_checkin);
+my $g_checkout = `date +%m/%d/%Y --date=\"4 days\"`;
+chop($g_checkout);
+my $g_othercity;
+my $g_numresults = 50;
+my $g_filtermode = "normal";
+my $g_sortdirection = "up";
+my $g_sortkey = "price";
+
+&main();
+exit;
+
+###############################################################################
+# Module entrypoint.
+###############################################################################
+sub main() {
+
+    GetOptions(\%opts,
+               "host=s" => \$g_hostname,
+               "token=s" => \$g_token,
+               "city=s" => \$g_city,
+               "state=s" => \$g_state,
+               "country=s" => \$g_country,
+               "guests1=i" => \$g_guests1,
+               "rooms=i" => \$g_rooms,
+               "checkin=s" => \$g_checkin,
+               "checkout=s" => \$g_checkout,
+               "numresults=i" => \$g_numresults,
+               "filtermode=s" => \$g_filtermode,
+               "sortdirection=s" => \$g_sortdirection,
+               "sortkey=s" => \$g_sortkey,
+               "help");
+
+    &validateOptions();
+    my $rsp = &performHotelSearch();
+    print $rsp . "\n";
+}
+
+###############################################################################
+# Make sure that whatever was entered on command line is within bounds.
+###############################################################################
+sub validateOptions() {
+    my ($s) = @_;
+    &usage("Usage:") if $opts{"help"};
+
+    $g_state = uc($g_state);
+    &usage("Invalid state/province") unless (2 == length($g_state));
+
+    $g_country = uc($g_country);
+    &usage("Invalid country code") unless (2 == length($g_country));
+
+    $g_othercity = $g_city . "," . $g_state . "," . $g_country;
+
+    &usage("Invalid checkin date [$g_checkin]") unless (isDate($g_checkin));
+    &usage("Invalid checkout date [$g_checkout]") unless (isDate($g_checkout));
+    &usage("Invalid guests1 [$g_guests1]") unless 
+        (($g_guests1 >= 1) && ($g_guests1 <=6));
+    &usage("Invalid rooms [$g_rooms]") unless 
+        (($g_rooms >= 1) && ($g_rooms <=3));
+
+    &usage("Invalid numresults [$g_numresults]") unless ($g_numresults > 1);
+
+    $g_filtermode = lc($g_filtermode);
+    &usage("Invalid filtermode [$g_filtermode]") 
+        unless ((0 == index($g_filtermode, "normal")) || (0 == index($g_filtermode,"stars:")));
+
+    $g_sortdirection = lc($g_sortdirection);
+    &usage("Invalid sortdirection [$g_sortdirection]") 
+        unless (($g_sortdirection eq "up") || ($g_sortdirection eq "down"));
+
+    $g_sortkey = lc($g_sortkey);
+    &usage("Invalid sortkey [$g_sortkey]") 
+        unless (($g_sortkey eq "price") || ($g_sortkey eq "stars") || 
+                ($g_sortkey eq "hotel") || ($g_sortkey eq "distance"));
+}
+
+###############################################################################
+# Shows the command line options.
+###############################################################################
+sub usage() {
+
+    my ($eMsg) = @_;
+    my $msg = "
+Refer to http://www.kayak.com/labs/api/search/spec.vtl for semantics
+
+$eMsg
+
+$0 
+  --token={your developer key}
+  --city={City to search within}
+  --state={2 character state/province code}
+  --country={2 character country code}
+  --guests1={integer 1-6}
+  --rooms={integer 1-3}
+  --checkin={MM/DD/YYYY}
+  --checkout={MM/DD/YYYY}
+  --numresults={integer 1-500}
+  --filtermode={normal || stars:#}
+  --sortdirection=$g_sortdirection 
+  --sortkey={up || down}
+  --help
+
+";
+    die($msg);
+}
+
+###############################################################################
+# expect MM/DD/YYYY
+###############################################################################
+sub isDate() {
+    my($s) = @_;
+    my $pattern = '([0-9]{2})/([0-9]{2})/([0-9]{4})';
+    return ($s =~ m/$pattern/);
+}
+
+##############################################################################
+# Assemble search URLs and initiate the search.
+##############################################################################
+sub performHotelSearch() {
+
+    my $sid = getsession($g_token);
+    die("Unable to get session") unless($sid);
+
+    my $url = "/s/apisearch?basicmode=true&minstars=-1";
+    $url .= "&action=dohotels&apimode=1";
+
+    $url .= "&othercity=" . uri_escape($g_othercity);
+    $url .= "&checkin_date=" . uri_escape($g_checkin);
+    $url .= "&checkout_date=" . uri_escape($g_checkout);
+    $url .= "&guests1=" . $g_guests1;
+    $url .= "&rooms=" . $g_rooms;
+    $url .= "&_sid_=" . $sid;
+
+    my $searchId = &start_search($url);
+    my ($more,$last_count,$xmlRsp) = &poll_results("h", $sid, $searchId, 
+                                                   $g_numresults, 0);
+    while($more) {
+        sleep(5);
+        ($more,$last_count,$xmlRsp) = &poll_results("h", $sid, $searchId, 
+                                                    $g_numresults, 0);
+    }
+
+    # Make final poll with c set to count which'll retrieve all the results
+    # at once.
+    ($more,$last_count,$xmlRsp) = &poll_results("h", $sid, $searchId, 
+                                                $last_count, 1);
+
+    return $xmlRsp;
+}
+
+
+##############################################################################
+# 
+##############################################################################
+sub getsession() {
+    my ($token) = @_;
+    die("Missing required developer token") unless ($token);
+    my $sid="";
+    my $response=get("$g_hostname/k/ident/apisession?token=$token");
+    my $parser = XML::DOM::Parser->new();
+    my $doc = $parser->parse($response);
+    $sid=$doc->getElementsByTagName('sid')->item(0)->getFirstChild->getNodeValue
+        if ( defined( $doc->getElementsByTagName('sid')->item(0)->getFirstChild ));
+    return $sid;
+}
+
+##############################################################################
+#
+##############################################################################
+sub start_search() {
+    my ($uri) = @_;
+
+    my $searchURL = $g_hostname . $uri;
+    my $response = get($searchURL);
+
+    my $parser = XML::DOM::Parser->new();
+    my $doc = $parser->parse($response);
+
+    my $searchid="";
+
+    $searchid = $doc->getElementsByTagName('searchid')->item(0)->getFirstChild->getNodeValue
+        if ( defined( $doc->getElementsByTagName('searchid')->item(0) ) ) ;
+    return $searchid if ( $searchid ne "" ) ;
+
+    if (defined($doc->getElementsByTagName('hotel_errors')->item(0)->getFirstChild )) {
+        my $errorNode = $doc->getElementsByTagName('hotel_errors')->item(0);
+        die($errorNode->toString());
+    }
+
+    die("unknown error in $0");
+}
+
+##############################################################################
+#
+##############################################################################
+sub poll_results() {
+    my($searchtype, $sid, $searchid, $maxRes, $showResults) = @_;
+    my $url = "/s/apibasic/hotel?searchid=$searchid";
+    $url .= "&apimode=1&_sid_=$sid&c=$maxRes";
+
+    my $postUrl = $g_hostname . $url;
+    my $response = get($postUrl);
+    my ($more,$last_count,$xmlStr) = handle_results($searchtype, $response, $showResults);
+    return ($more,$last_count,$xmlStr);
+}
+
+##############################################################################
+# The response in this case is the set of results.
+##############################################################################
+sub handle_results() {
+    my($searchtype, $response, $showResults) = @_;
+
+
+    my $more = "";
+
+    my $parser = XML::DOM::Parser->new();
+    my $doc = $parser->parse($response);
+
+    if ( defined($doc->getElementsByTagName('morepending')->item(0)->getFirstChild) )
+    {
+        $more=$doc->getElementsByTagName('morepending')->item(0)->getFirstChild->getNodeValue;
+    }
+
+    my $lastcount =
+        $doc->getElementsByTagName('count')->item(0)->getFirstChild->getNodeValue;
+
+
+    my $xmlStr = $doc->toString;
+
+
+    return (1,$lastcount,$xmlStr) if( $more eq "true");
+    return (0,$lastcount,$xmlStr);
+}

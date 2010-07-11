@@ -1,0 +1,239 @@
+/*
+  Sample API using Kayak API.
+
+  compile:
+    javac ksearchJavaExample.java
+
+  Hotel Search:
+    java ksearchJavaExample h "Boston,MA,US" 05/07/06 05/09/06
+
+  Flight Search:
+    java ksearchJavaExample f BOS SFO 05/07/06 05/09/06 
+    
+*/
+
+import java.io.*;
+import java.net.*;
+import javax.xml.parsers.*;
+import org.w3c.dom.*;
+
+
+//import
+public class ksearchJavaExample {
+	//CONSTANTS
+	String hostname="http://www.kayak.com";
+	String token="mCHpMz2L_a_OrEkz3FSiDg";
+	String sessionid,searchid;
+	char searchtype;
+	int lastcount;
+	
+	public ksearchJavaExample(String [] args){
+		if(args.length < 4 || args.length > 5) {
+			System.out.println("USAGE:\n" +
+				"ksearchJavaExample f ORIGIN_AIPORT DESTINATION_AIRPORT DEPART_DATE [RETURN_DATE]\n" +
+				"ksearchjavaExample h \"city, RC, CC\" CHECKIN_DATE CHECKOUT_DATE\n" );
+			System.exit(1);
+		}
+		
+		searchtype= args[0].charAt(0);
+		sessionid= getsession();
+		System.out.println("Session ID:\t" + sessionid );
+		
+		if(searchtype == 'f' ){
+			searchid= start_flight_search("n", args[1],args[2],args[3],args[4] );
+		}
+		
+		if( searchtype == 'h'){
+			searchid= start_hotel_search(args[1],args[2],args[3]);
+		}
+		System.out.println("Search ID:\t"+ searchid);
+		while (pollResults()) {
+			System.out.println("waiting for more...");
+		}
+	}
+	
+	private String getsession(){
+		System.out.println("Token:\t\t" + token  );
+		String response=fetch(hostname+"/k/ident/apisession?token=" + token );
+		Element root=xmlRoot(response);
+		NodeList sessionid=root.getElementsByTagName("sid");
+		if( sessionid.getLength() == 0){
+			System.out.println("BAD TOKEN: " + response);
+			System.exit(1);
+		}
+		return sessionid.item(0).getFirstChild().getNodeValue();
+	}
+	
+	
+	private String start_flight_search(String oneway,String origin, String destination, 
+			String dep_date , String ret_date) {
+		String url=hostname +"/s/apisearch?basicmode=true&oneway=n&origin=" +origin +
+			"&destination=" +destination + "&destcode=&depart_date="+ dep_date +
+			"&depart_time=a&return_date=" + ret_date + "&return_time=a&travelers=1" +
+			"&cabin=e&action=doflights&apimode=1&_sid_=" + sessionid;
+		return start_search(url);
+		
+	}
+	private String start_hotel_search(String cityandcountry, String 	checkindate
+			,String checkoutdate){
+		try {
+			cityandcountry = URLEncoder.encode(cityandcountry,"UTF-8");  
+			checkindate = URLEncoder.encode(checkindate,"UTF-8");
+			checkoutdate = URLEncoder.encode(checkoutdate, "UTF-8");
+		} catch (Exception e) {}
+		String url= hostname +"/s/apisearch?basicmode=true&othercity=" +cityandcountry +
+		"&checkin_date=" + checkindate + "&checkout_date="+ checkoutdate +"&minstars=-1&guests1=1&guests2=1&rooms=1&action=dohotels&apimode=1"+
+		"&_sid_=" + sessionid;
+		return start_search(url);
+		
+	}
+	
+	private String start_search(String uri){
+		String response= fetch(uri);
+		
+		
+		
+		Element root= xmlRoot(response);
+		NodeList searchid=root.getElementsByTagName("searchid");
+		if( searchid.getLength() == 0){
+			System.out.println("SEARCH ERROR: \n" + response);
+			System.exit(1);
+		}
+		return searchid.item(0).getFirstChild().getNodeValue();
+	}
+
+	private boolean pollResults(){
+		String uri="";
+		switch( searchtype){
+		case 'f' :
+			uri= hostname +"/s/apibasic/flight?searchid="+searchid+"&apimode=1&_sid_="+sessionid ; 
+			break;
+		case 'h' : 
+			uri= hostname+ "/s/apibasic/hotel?searchid="+searchid+ "&apimode=1&_sid_=" + sessionid; 
+			break;
+		}
+		
+		String response=fetch(uri);
+		System.out.println("POLL REULTS URL: "+ uri + "\n" + response);
+			
+		return handleResults(response);
+	}
+	
+	private boolean handleResults(String response){
+		boolean more=false;
+		Document root= xmlRoot2(response);
+		
+		lastcount=Integer.parseInt( root.getElementsByTagName("count").item(0).getFirstChild().getNodeValue());
+		
+		if (root.getElementsByTagName("morepending").getLength() != 0) {
+			more = root.getElementsByTagName("morepending").item(0).getFirstChild().getNodeValue().equals("true");
+			System.out.println("more pending=" + more);
+		}
+		
+		switch(searchtype){
+		
+		case 'f':
+			NodeList trips=root.getElementsByTagName("trips");
+			System.out.println(trips.getLength());
+			
+				for(Node trip= trips.item(0).getFirstChild(); trip != null ; trip= trip.getNextSibling()){
+				
+					System.out.println(trip.getNodeName());
+					
+				}
+			break;
+			
+		case 'h':
+			NodeList hotel= root.getElementsByTagName("hotel");
+			System.out.println(hotel.getLength());
+			
+			for(int count=0;count<hotel.getLength();count++){
+				String hotelstring="";
+				 NodeList childnodes =hotel.item(count).getChildNodes();
+				 for( int countchild=0; countchild<childnodes.getLength(); countchild++){
+					 String nodename=childnodes.item(countchild).getNodeName();
+					 Node childnode=childnodes.item(countchild);
+					 if( nodename == "price"){
+						 if (childnode.getFirstChild() != null)
+							 hotelstring += childnode.getFirstChild().getNodeValue();
+						 hotelstring += childnode.getAttributes().getNamedItem("url") + "\n";
+						 
+					 }
+					 if( nodename =="stars")
+						 hotelstring += "   " +childnode.getFirstChild().getNodeValue() ;
+					 if( nodename =="name")
+						 hotelstring += "   " +childnode.getFirstChild().getNodeValue() ;
+					 if( nodename =="pricehistorylo")
+						 hotelstring += "   " +childnode.getFirstChild().getNodeValue() ;
+					 if( nodename =="pricehistoryhi")
+						 hotelstring += " - " +childnode.getFirstChild().getNodeValue() ;
+					 
+				 }
+				 
+				 System.out.println(hotelstring);
+			}
+			break;
+		
+		}
+		return more;
+	}
+	
+	
+	
+	
+	private Element xmlRoot(String response){
+		Document doc =null;
+		try {
+		     DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+		     DocumentBuilder db = dbf.newDocumentBuilder();
+		     ByteArrayInputStream bais = new ByteArrayInputStream(response.getBytes());
+		     doc = db.parse(bais);
+		    } catch (Exception e) {
+		      System.out.print("Problem parsing the xml: \n" + e.toString());
+		}
+		    
+		return doc.getDocumentElement();
+		
+	}
+	
+	private Document xmlRoot2(String response){
+		Document doc =null;
+		try {
+		     DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+		     DocumentBuilder db = dbf.newDocumentBuilder();
+		     ByteArrayInputStream bais = new ByteArrayInputStream(response.getBytes());
+		     doc = db.parse(bais);
+		    } catch (Exception e) {
+		      System.out.print("Problem parsing the xml: \n" + e.toString());
+		}
+		    
+		return doc;
+		
+	}
+	
+	
+	  private String fetch(String urlstring){
+		  String content = "";
+	  
+		  try {
+			URL url  = new URL(urlstring);  
+	        InputStream is = url.openStream();
+	        BufferedReader d = new BufferedReader(new InputStreamReader(is));
+	        String s;
+	        
+	        while (null != (s = d.readLine())) {
+	            content = content + s + "\n";
+	        }
+	        is.close();
+	        
+		  } catch ( Exception e ) { System.out.println(e.getMessage() ); }
+		  return content;
+	    }
+	
+	public static void main(String[] args) {
+		ksearchJavaExample ks = new ksearchJavaExample(args);		
+	}
+
+}
+ 
+
